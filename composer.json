@@ -1,0 +1,86 @@
+{
+    "name": "packstub/credits",
+    "description": "Credits and usage metering for Laravel: per-user or per-team balances, credits that expire and are spent soonest-expiring first, holds you reserve before an AI call and settle once its cost is known, fractional meters that never round a credit away, plan allowances renewed without a cron, idempotency keys, refunds to the original lots and an auditor that proves the ledger balances.",
+    "keywords": [
+        "laravel",
+        "credits",
+        "usage-based-billing",
+        "metering",
+        "ledger",
+        "wallet",
+        "saas",
+        "ai"
+    ],
+    "type": "library",
+    "license": "MIT",
+    "funding": [
+        {
+            "type": "github",
+            "url": "https://github.com/sponsors/icaliman"
+        }
+    ],
+    "authors": [
+        {
+            "name": "Packstub",
+            "email": "support@packstub.dev",
+            "homepage": "https://packstub.dev"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "laravel/framework": "^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^11.2",
+        "phpunit/phpunit": "^13.3",
+        "laravel/pint": "^1.13",
+        "pestphp/pest": "^5.1",
+        "pestphp/pest-plugin-laravel": "^5.0",
+        "orchestra/pest-plugin-testbench": "^5.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Packstub\\Credits\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Packstub\\Credits\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "test:filter": "pest --filter",
+        "lint": "vendor/bin/pint",
+        "lint:test": "vendor/bin/pint --test"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Packstub\\Credits\\CreditsServiceProvider"
+            ],
+            "aliases": {
+                "Credits": "Packstub\\Credits\\Facades\\Credits"
+            }
+        },
+        "branch-alias": {
+            "dev-main": "1.x-dev"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "homepage": "https://github.com/packstub/credits",
+    "support": {
+        "issues": "https://github.com/packstub/credits/issues",
+        "source": "https://github.com/packstub/credits"
+    },
+    "suggest": {
+        "packstub/agents": "Charge AI turns in credits: hold before the turn, settle on the token usage through the meters.",
+        "packstub/filament-features": "Plans and limits per tenant: hand each plan's monthly credits to Credits::allowancesUsing()."
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    }
+}
