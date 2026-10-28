@@ -27,24 +27,25 @@ $hold->settleUsage([                                      // charge what it actu
 $team->credits()->available();                            // whole credits; a fraction carries to the next call
 ```
 
-## What it does
+## Features
 
-Charging per use, AI above all, needs more than a balance and its history:
+- **[Holds for AI calls](https://packstub.dev/docs/credits/holds)**: reserve an estimate before the call, settle what it cost after; a dead worker leaks nothing.
+- **[Credits that expire, spent in order](https://packstub.dev/docs/credits/spending#grants-and-lots)**: every grant is a lot with its own expiry, taken soonest-expiring first.
+- **[Meters with exact fractions](https://packstub.dev/docs/credits/meters#exact-fractions)**: 400 tokens at 1 credit per 1,000 charge nothing yet; the remainder carries to the next call.
+- **[Plan allowances without a cron](https://packstub.dev/docs/credits/allowances)**: granted once per period on first use, however many workers race; anchored or calendar.
+- **[Idempotency keys](https://packstub.dev/docs/credits/spending#idempotency-keys)**: a retried job or webhook never charges twice; a reused key for a different request is an error.
+- **[Refunds and transfers](https://packstub.dev/docs/credits/spending#refunds)**: credits go back to the lots they came from, or move to another wallet, keeping their expiry.
+- **[Upgrades, rollover, rates per plan](https://packstub.dev/docs/credits/allowances)**: a bigger plan grants the difference at once; quotes before charging.
+- **[Reporting from the ledger](https://packstub.dev/docs/credits/spending#reporting)**: what expires when, the balance at any moment, credits spent and usage per period.
+- **[Books that balance](https://packstub.dev/docs/credits/auditing)**: append-only lines, row locks, and `credits:audit` to prove every cached number from the rows under it.
 
-- **Holds.** The cost of an AI call is known only after it ran. Reserve an estimate first, so two parallel calls cannot spend the same credits, then settle the real cost or release the hold. A worker that dies mid-call does not leak credits: the hold expires and gives them back. Work that ran past its hold still settles.
-- **Credits that expire, spent in the right order.** Every grant is a lot with its own expiry. Spends take from the lots that expire soonest, then from those that never do, so customers never lose credits they could have used.
-- **Meters that never round a credit away.** 400 tokens at 1 credit per 1,000 charge nothing now; the fraction is carried on the wallet and the third such call charges 1. Thirty-seven small calls cost exactly what one call of their total would.
-- **Plan allowances without a cron.** `Allowance::monthly(1_000)` is granted the first time a wallet is touched in a period, once, however many workers race for it. Anchored to a subscription's start, it renews on the 28th when the 31st does not exist.
-- **Idempotency keys** on every operation, so a retried job or webhook never charges twice, and a key reused for a different request is an error instead of a silent no-op.
-- **Refunds back to the original lots**, keeping their expiry; partial refunds unwind from the end so no credit returns twice.
-- **Transfers between wallets**, a team's pool to a member, both locked in one transaction, the credits keeping their expiry.
-- **Upgrades that apply at once.** A plan that grows mid-period grants the difference immediately; one that shrinks takes effect next period. Rollover for good or for a number of periods.
-- **Rates per plan** over the configured meters, and quotes of what usage would cost before charging it.
-- **Reporting from the ledger**: what expires when, the balance at any moment, credits spent and metered usage per period.
-- **Books that prove they balance.** `php artisan credits:audit` recomputes every cached number from the rows under it and exits non-zero on drift; ledger lines are append-only.
-- **Safe under concurrency.** Every operation runs in one transaction under a row lock; reading a balance takes none unless something is due. The suite forks 20 processes that race for one wallet and checks that exactly the affordable spends go through, and replays hundreds of random operations through expiries, holds and periods, auditing the books as it goes.
+Integer credits throughout (pick your scale: 1 credit = 1/1000 of a cent works), no floats, SQLite, MySQL, MariaDB and Postgres.
 
-Integer credits throughout (pick your scale: 1 credit = 1/1000 of a cent works), no floats, Laravel 13, PHP 8.4+, SQLite, MySQL, MariaDB and Postgres.
+## Compatibility
+
+| Credits | Laravel | PHP |
+| --- | --- | --- |
+| 1.x | 13.x | 8.4+ |
 
 ## Installation
 
