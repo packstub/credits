@@ -1,5 +1,17 @@
 # Credits for Laravel
 
+<div class="filament-hidden">
+
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/packstub/credits.svg?style=flat-square)](https://packagist.org/packages/packstub/credits)
+[![Tests](https://img.shields.io/github/actions/workflow/status/packstub/credits/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/packstub/credits/actions/workflows/tests.yml)
+[![Total Downloads](https://img.shields.io/packagist/dt/packstub/credits.svg?style=flat-square)](https://packagist.org/packages/packstub/credits)
+[![License](https://img.shields.io/packagist/l/packstub/credits.svg?style=flat-square)](https://github.com/packstub/credits/blob/main/LICENSE.md)
+[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-ea4aaa?style=flat-square&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/icaliman)
+
+![Credits for Laravel: a Usage & credits page with the available, held and expiring balances, the lots in the order spends take them, and the ledger with a grant, a spend, its refund, a metered capture and a pending hold](https://raw.githubusercontent.com/packstub/art/main/credits/banner.jpg)
+
+</div>
+
 Credits and usage metering for Laravel apps that charge per use: AI features, exports, SMS, API calls. Give each user or team a balance, let plans top it up every month, charge measured usage, and know, at any time, where every credit came from and where it went.
 
 ```php
