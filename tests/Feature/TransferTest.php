@@ -33,6 +33,8 @@ it('moves credits between two wallets, each with its own ledger line', function 
 });
 
 it('keeps the credits\' expiry, one lot per expiry they had', function () {
+    $this->freezeSecond();
+
     $pool = $this->team('Acme')->credits();
     $member = $this->team('Member')->credits('sms');
     $pool->grant(10, expiresAt: now()->addDays(2)->startOfSecond());
