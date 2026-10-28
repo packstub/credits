@@ -5,4 +5,5 @@
 - [Holds and AI calls](holds.md)
 - [Meters](meters.md)
 - [Allowances](allowances.md)
+- [Selling credits](selling-credits.md)
 - [Auditing and concurrency](auditing.md)

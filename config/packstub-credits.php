@@ -4,6 +4,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Holder keys
+    |--------------------------------------------------------------------------
+    |
+    | The primary key type of the models that hold credits (users, teams):
+    | `int` for auto-incrementing ids, `uuid` or `ulid` for models using
+    | HasUuids / HasUlids. Read by the migration when the tables are created;
+    | changing it afterwards needs a new migration of `credit_wallets`.
+    |
+    */
+
+    'holder_key_type' => env('CREDITS_HOLDER_KEY_TYPE', 'int'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Meters
     |--------------------------------------------------------------------------
     |

@@ -12,14 +12,18 @@ Recomputes every cached number from the rows under it and exits non-zero on any 
 - `balance` = the unspent credits of its lots, the sum of its ledger, and the last line's `balance_after`;
 - `held` = its pending holds, the sum of the ledger's `held_change`, and the last line's `held_after`;
 - `held` <= `balance`;
-- each lot's `remaining` = the sum of the allocations that filled and drained it;
+- each lot's `remaining` = the sum of the allocations that filled and drained it, and lies between 0 and the lot's `amount`;
 - each transaction's `amount` = the sum of its allocations.
 
-It only reads. A row edited by hand shows up as the checks it broke.
+It only reads. A row edited by hand shows up as the checks it broke. The models refuse to update or delete ledger lines and allocations, so drift means someone wrote to the tables directly.
 
 ## Concurrency
 
 Every operation runs in one database transaction and locks the wallet's row first (`SELECT … FOR UPDATE`), so two workers spending from one wallet take turns and the second sees the first's spend. The suite forks 20 processes that each try to spend 10 credits from a wallet of 100 and checks that exactly 10 succeed, 10 are refused and the books balance.
+
+A transfer locks both wallets, always in the order of their ids, so two transfers between the same wallets in opposite directions cannot deadlock.
+
+Reading a balance (`available()`, `total()`, `expiring()`) takes no lock when nothing is due: it reloads the wallet and checks for due lots, stale holds and owed allowances first, and only catches up, under the lock, when there is something to do.
 
 Operations nest inside your own transactions; events wait for your commit.
 

@@ -9,6 +9,8 @@ use Packstub\Credits\CreditsManager;
  * @method static \Packstub\Credits\Models\Wallet wallet(\Illuminate\Database\Eloquent\Model $holder, string $name = 'default')
  * @method static void allowancesUsing(\Closure|null $resolver)
  * @method static array allowancesFor(\Packstub\Credits\Models\Wallet $wallet)
+ * @method static void metersUsing(\Closure|null $resolver)
+ * @method static array metersFor(\Packstub\Credits\Models\Wallet $wallet)
  * @method static int expire()
  *
  * @see CreditsManager

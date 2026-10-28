@@ -5,7 +5,7 @@ namespace Packstub\Credits\Exceptions;
 use Packstub\Credits\Models\Wallet;
 use RuntimeException;
 
-class InsufficientCredits extends RuntimeException
+class InsufficientCredits extends RuntimeException implements CreditsException
 {
     public function __construct(
         public readonly Wallet $wallet,

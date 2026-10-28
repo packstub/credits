@@ -5,10 +5,13 @@ use Illuminate\Support\Facades\Event;
 use Packstub\Credits\Enums\TransactionType;
 use Packstub\Credits\Events\BalanceLow;
 use Packstub\Credits\Events\TransactionRecorded;
+use Packstub\Credits\Exceptions\CreditsException;
 use Packstub\Credits\Exceptions\IdempotencyConflict;
 use Packstub\Credits\Exceptions\InsufficientCredits;
 use Packstub\Credits\Exceptions\InvalidAmount;
 use Packstub\Credits\Models\Grant;
+use Packstub\Credits\Models\Transaction;
+use Packstub\Credits\Tests\Fixtures\Models\Team;
 
 it('grants and spends', function () {
     $wallet = $this->team()->credits();
@@ -49,10 +52,10 @@ it('spends the lots that expire soonest first, then those that never expire', fu
 
     $spend = $wallet->spend(25);
 
-    expect($spend->allocations->pluck('amount', 'grant_id')->all())->toBe([
+    expect($spend->allocations()->orderBy('id')->pluck('amount', 'grant_id')->all())->toBe([
         $soon->allocations->first()->grant_id => -10,
         $late->allocations->first()->grant_id => -15,
-    ])->and(Grant::query()->pluck('remaining', 'source')->all())->toBe(['top-up' => 50, 'plan' => 5, 'promo' => 0]);
+    ])->and(Grant::query()->orderBy('id')->pluck('remaining', 'source')->all())->toBe(['top-up' => 50, 'plan' => 5, 'promo' => 0]);
 });
 
 it('expires lots on the next touch without a scheduler', function () {
@@ -109,7 +112,7 @@ it('lets an operator adjust either way, with a reason on the ledger', function (
     $wallet->adjust(-3, 'Duplicate top-up');
 
     expect($wallet->available())->toBe(12)
-        ->and($wallet->transactions()->where('type', TransactionType::Adjust)->pluck('reason')->all())
+        ->and($wallet->transactions()->where('type', TransactionType::Adjust)->orderBy('id')->pluck('reason')->all())
         ->toBe(['Goodwill after the outage', 'Duplicate top-up']);
 });
 
@@ -163,4 +166,126 @@ it('dispatches nothing for an operation that failed', function () {
     expect(fn () => $wallet->spend(5))->toThrow(InsufficientCredits::class);
 
     Event::assertNotDispatched(TransactionRecorded::class);
+});
+
+it('reads the balance without writing when nothing is due', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(100, expiresAt: now()->addDay());
+    $wallet->hold(10);
+
+    DB::enableQueryLog();
+    $available = $wallet->available();
+    $writes = collect(DB::getQueryLog())->pluck('query')->filter(fn (string $sql) => preg_match('/^(insert|update|delete)/i', $sql));
+
+    expect($available)->toBe(90)->and($writes)->toBeEmpty();
+});
+
+it('picks up changes another process made when read', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(100);
+
+    Team::query()->first()->credits()->spend(40);
+
+    expect($wallet->balance)->toBe(100)->and($wallet->available())->toBe(60);
+});
+
+it('says how much expires by a date', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(10, expiresAt: now()->addDays(2));
+    $wallet->grant(20, expiresAt: now()->addDays(20));
+    $wallet->grant(50);
+    $wallet->spend(5);
+
+    expect($wallet->expiring(now()->addWeek()))->toBe(5)
+        ->and($wallet->expiring(now()->addMonth()))->toBe(25);
+});
+
+it('tells the balance at any moment from the ledger alone', function () {
+    $wallet = $this->team()->credits();
+    $start = now()->toImmutable();
+
+    $wallet->grant(100);
+    $this->travel(1)->day();
+    $wallet->spend(30);
+    $this->travel(1)->day();
+    $wallet->spend(20);
+
+    expect($wallet->balanceAt($start->subMinute()))->toBe(0)
+        ->and($wallet->balanceAt($start))->toBe(100)
+        ->and($wallet->balanceAt($start->addDay()->addHour()))->toBe(70)
+        ->and($wallet->balanceAt(now()))->toBe(50);
+});
+
+it('sums what usage cost over a period, refunds taken off', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(1_000);
+    $wallet->spend(10);
+    $this->travel(1)->day();
+    $from = now()->toImmutable();
+
+    $spend = $wallet->spend(30);
+    $wallet->hold(50)->settle(20);
+    $wallet->meter(['ai.input_tokens' => 4_000, 'ai.output_tokens' => 1_000]);
+    $wallet->meter('ai.input_tokens', 1_500);
+    $wallet->refund($spend, 5);
+    $wallet->adjust(-7, 'Not usage');
+
+    expect($wallet->spent($from))->toBe(30 + 20 + 9 + 1 - 5)
+        ->and($wallet->spent())->toBe(10 + 55)
+        ->and($wallet->spent(to: $from))->toBe(10)
+        ->and($wallet->usage($from))->toBe(['ai.input_tokens' => 5_500, 'ai.output_tokens' => 1_000]);
+});
+
+it('adds an adjustment that expires when told to', function () {
+    $wallet = $this->team()->credits();
+
+    $wallet->adjust(50, 'Make-good for the outage', expiresAt: now()->addDays(30));
+
+    expect(Grant::query()->sole()->only('source', 'amount'))->toBe(['source' => 'adjustment', 'amount' => 50])
+        ->and(Grant::query()->sole()->expires_at->toDateString())->toBe(now()->addDays(30)->toDateString());
+});
+
+it('keeps the ledger append-only', function () {
+    $wallet = $this->team()->credits();
+    $transaction = $wallet->grant(10);
+
+    expect(fn () => $transaction->update(['amount' => 1_000]))->toThrow(LogicException::class, 'append-only')
+        ->and(fn () => $transaction->delete())->toThrow(LogicException::class, 'append-only')
+        ->and(fn () => $transaction->allocations->first()->update(['amount' => 1_000]))->toThrow(LogicException::class, 'append-only')
+        ->and(Transaction::query()->sole()->amount)->toBe(10);
+});
+
+it('refuses a wallet for a model that is not saved yet', function () {
+    expect(fn () => (new Team(['name' => 'Draft']))->credits())->toThrow(LogicException::class, 'Save the Team');
+});
+
+it('throws exceptions an app can catch as one', function () {
+    $wallet = $this->team()->credits();
+
+    // toThrow() takes an interface's name for a message, so catch by hand.
+    $caught = function (Closure $operation) {
+        try {
+            $operation();
+        } catch (CreditsException) {
+            return true;
+        }
+
+        return false;
+    };
+
+    expect($caught(fn () => $wallet->spend(1)))->toBeTrue()
+        ->and($caught(fn () => $wallet->grant(-1)))->toBeTrue()
+        ->and($caught(fn () => $wallet->meter('nope', 1)))->toBeTrue();
+});
+
+it('filters the statement by type and period', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(100);
+    $this->travel(1)->day();
+    $wallet->spend(10);
+    $wallet->spend(5);
+
+    expect($wallet->transactions()->ofType(TransactionType::Spend)->count())->toBe(2)
+        ->and($wallet->transactions()->between(now()->startOfDay())->count())->toBe(2)
+        ->and($wallet->transactions()->between(null, now()->startOfDay())->count())->toBe(1);
 });

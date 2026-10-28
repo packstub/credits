@@ -2,10 +2,14 @@
 
 use Illuminate\Support\Facades\Event;
 use Packstub\Credits\Enums\HoldStatus;
+use Packstub\Credits\Enums\TransactionType;
 use Packstub\Credits\Events\Shortfall;
 use Packstub\Credits\Exceptions\HoldNotPending;
 use Packstub\Credits\Exceptions\InsufficientCredits;
+use Packstub\Credits\Exceptions\InvalidAmount;
+use Packstub\Credits\Facades\Credits;
 use Packstub\Credits\Models\Hold;
+use Packstub\Credits\Support\Allowance;
 
 it('reserves credits so two calls cannot spend the same ones', function () {
     $wallet = $this->team()->credits();
@@ -158,4 +162,122 @@ it('finds a pending hold by its meta, as the laravel/ai recipe does', function (
     Hold::query()->where('meta->invocation', 'inv-2')->where('status', 'pending')->first()?->settle(5);
 
     expect($wallet->available())->toBe(65);
+});
+
+it('keeps what a hold reserves when its lot expires, even with fresh credits beside it', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(80, expiresAt: now()->addHour());
+    $hold = $wallet->hold(80, ttl: 7200);
+    $wallet->grant(50, 'Top-up');
+
+    $this->travel(90)->minutes();
+
+    // The hold reserved the expiring lot; the top-up bought afterwards is still there to spend.
+    expect($wallet->available())->toBe(50)->and($wallet->total())->toBe(130);
+
+    $wallet->spend(50);
+    $hold->settle(50);
+
+    // The hold was charged from its expired lot; the 30 it gave back expired right away.
+    expect($wallet->total())->toBe(0)->and($wallet->balance)->toBe(0);
+    $this->artisan('credits:audit')->assertSuccessful();
+});
+
+it('charges a hold across the new period from the old period\'s allowance it reserved', function () {
+    $this->travelTo(now()->setDate(2026, 10, 31)->setTime(23, 55));
+    Credits::allowancesUsing(fn () => [Allowance::monthly(1_000)]);
+
+    $wallet = $this->team()->credits();
+    $hold = $wallet->hold(200, 'AI turn');
+
+    $this->travel(10)->minutes();
+    $hold->settle(150);
+
+    // October's 1,000 paid for the turn (its other 850 expired with the month); November's allowance is untouched.
+    expect($wallet->available())->toBe(1_000)
+        ->and((int) $wallet->transactions()->ofType(TransactionType::Expire)->sum('amount'))->toBe(-850);
+});
+
+it('expires what a released hold gave back of a lot that ran out under it', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(40, expiresAt: now()->addMinutes(5));
+    $wallet->grant(10);
+    $hold = $wallet->hold(40);
+
+    $this->travel(10)->minutes();
+    $hold->release();
+
+    expect($wallet->balance)->toBe(10)->and($wallet->available())->toBe(10);
+});
+
+it('extends a hold for work still running, never shortening it', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(100);
+    $hold = $wallet->hold(30, ttl: 60);
+
+    $this->travel(50)->seconds();
+    $hold->extend(120);
+
+    expect($hold->expires_at->toDateTimeString())->toBe(now()->addSeconds(120)->toDateTimeString());
+
+    $hold->extend(10);
+
+    expect($hold->expires_at->toDateTimeString())->toBe(now()->addSeconds(120)->toDateTimeString());
+
+    $this->travel(100)->seconds();
+
+    expect($wallet->available())->toBe(70)->and($hold->fresh()->isPending())->toBeTrue();
+});
+
+it('refuses to extend a hold that is over', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(100);
+    $expired = $wallet->hold(30, ttl: 60);
+    $settled = $wallet->hold(30);
+    $settled->settle(10);
+
+    $this->travel(2)->minutes();
+
+    expect(fn () => $expired->extend())->toThrow(HoldNotPending::class)
+        ->and(fn () => $settled->extend())->toThrow(HoldNotPending::class);
+});
+
+it('refuses a hold that would never live', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(100);
+
+    expect(fn () => $wallet->hold(10, ttl: 0))->toThrow(InvalidAmount::class)
+        ->and(fn () => $wallet->hold(10, ttl: -5))->toThrow(InvalidAmount::class)
+        ->and($wallet->available())->toBe(100);
+});
+
+it('links a hold to its ledger lines and its settlement', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(100);
+    $hold = $wallet->hold(30);
+    $pending = $wallet->hold(10);
+
+    $capture = $hold->settle(12);
+
+    expect($hold->transactions()->orderBy('id')->pluck('type')->map->value->all())->toBe(['hold', 'capture'])
+        ->and($hold->settlement->id)->toBe($capture->id)
+        ->and($hold->isSettled())->toBeTrue()
+        ->and($wallet->holds()->pending()->pluck('id')->all())->toBe([$pending->id]);
+});
+
+it('settles several holds in any order without touching each other\'s reservation', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(30, expiresAt: now()->addDays(1));
+    $wallet->grant(100);
+
+    $a = $wallet->hold(40);
+    $b = $wallet->hold(50);
+
+    $b->settle(70);
+    expect($wallet->available())->toBe(130 - 70 - 40);
+
+    $a->settle(10);
+    expect($wallet->available())->toBe(130 - 70 - 10)->and($wallet->held)->toBe(0);
+
+    $this->artisan('credits:audit')->assertSuccessful();
 });

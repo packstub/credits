@@ -66,6 +66,9 @@ jobs:
           - db: mysql
             port: 3306
             username: root
+          - db: mariadb
+            port: 3307
+            username: root
 
     services:
       postgres:
@@ -82,6 +85,13 @@ jobs:
           MYSQL_DATABASE: testing
         ports: ["3306:3306"]
         options: --health-cmd="mysqladmin ping -h 127.0.0.1 -ppassword" --health-interval=5s --health-timeout=5s --health-retries=10
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: password
+          MARIADB_DATABASE: testing
+        ports: ["3307:3306"]
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=5s --health-timeout=5s --health-retries=10
 
     env:
       DB_CONNECTION: ${{ matrix.db }}

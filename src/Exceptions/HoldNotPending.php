@@ -5,7 +5,7 @@ namespace Packstub\Credits\Exceptions;
 use LogicException;
 use Packstub\Credits\Models\Hold;
 
-class HoldNotPending extends LogicException
+class HoldNotPending extends LogicException implements CreditsException
 {
     public function __construct(public readonly Hold $hold)
     {

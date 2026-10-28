@@ -28,12 +28,19 @@ use Throwable;
  * stale holds are released and the current period's allowances are granted,
  * so nothing depends on a cron having run. `credits:expire` does the same
  * for wallets nobody touches, so their events still fire on time.
+ *
+ * Pending holds reserve the wallet's soonest-expiring credits, the ones the
+ * work would have been charged from had it been charged up front: a capture
+ * takes from the front of the spend order, every other take skips the first
+ * `held` credits, and a lot that expires under a hold keeps what the hold
+ * reserves until it is settled or released.
  */
 final class Ledger
 {
     public static function grant(Wallet $wallet, int $amount, ?string $reason, ?CarbonInterface $expiresAt, string $source, ?string $key, array $meta, TransactionType $type = TransactionType::Grant): Transaction
     {
         self::positive($amount);
+        self::text($key, $reason, $source);
 
         return self::locked($wallet, function (Wallet $wallet) use ($amount, $reason, $expiresAt, $source, $key, $meta, $type) {
             if ($replay = self::replay($wallet, $key, $type, fn (Transaction $t) => $t->amount === $amount)) {
@@ -47,6 +54,7 @@ final class Ledger
     public static function spend(Wallet $wallet, int $amount, ?string $reason, ?string $key, array $meta, TransactionType $type = TransactionType::Spend): Transaction
     {
         self::positive($amount);
+        self::text($key, $reason);
 
         return self::locked($wallet, function (Wallet $wallet) use ($amount, $reason, $key, $meta, $type) {
             if ($replay = self::replay($wallet, $key, $type, fn (Transaction $t) => $t->amount === -$amount)) {
@@ -61,16 +69,23 @@ final class Ledger
         });
     }
 
-    public static function adjust(Wallet $wallet, int $amount, string $reason, ?string $key, array $meta): Transaction
+    public static function adjust(Wallet $wallet, int $amount, string $reason, ?string $key, array $meta, ?CarbonInterface $expiresAt = null): Transaction
     {
+        // The one integer whose negation is not an integer.
+        if ($amount === PHP_INT_MIN) {
+            throw InvalidAmount::outOfRange($amount);
+        }
+
         return $amount >= 0
-            ? self::grant($wallet, $amount, $reason, null, 'adjustment', $key, $meta, TransactionType::Adjust)
+            ? self::grant($wallet, $amount, $reason, $expiresAt, 'adjustment', $key, $meta, TransactionType::Adjust)
             : self::spend($wallet, -$amount, $reason, $key, $meta, TransactionType::Adjust);
     }
 
     public static function hold(Wallet $wallet, int $amount, ?string $reason, ?int $ttl, ?string $key, array $meta): Hold
     {
         self::positive($amount);
+        self::text($key, $reason);
+        $ttl = self::ttl($ttl);
 
         // The hold keeps the caller's wallet, so settling it later updates the model the caller holds.
         return self::locked($wallet, function (Wallet $locked) use ($wallet, $amount, $reason, $ttl, $key, $meta) {
@@ -78,7 +93,7 @@ final class Ledger
         });
     }
 
-    private static function placeHold(Wallet $wallet, int $amount, ?string $reason, ?int $ttl, ?string $key, array $meta): Hold
+    private static function placeHold(Wallet $wallet, int $amount, ?string $reason, int $ttl, ?string $key, array $meta): Hold
     {
         if ($replay = self::replay($wallet, $key, TransactionType::Hold, fn (Transaction $t) => $t->held_change === $amount)) {
             return $replay->hold;
@@ -92,12 +107,11 @@ final class Ledger
             'amount' => $amount,
             'status' => HoldStatus::Pending,
             'reason' => $reason,
-            'expires_at' => now()->addSeconds($ttl ?? (int) config('packstub-credits.hold_ttl', 900)),
+            'expires_at' => now()->addSeconds($ttl),
             'meta' => $meta ?: null,
         ]);
 
         $wallet->held += $amount;
-        $wallet->save();
 
         self::record($wallet, TransactionType::Hold, 0, $reason, $key, $meta, heldChange: $amount, hold: $hold);
 
@@ -153,7 +167,9 @@ final class Ledger
                 self::later(new Shortfall($wallet, $fresh, $shortfall));
             }
 
-            return self::take($wallet, TransactionType::Capture, $charge, $fresh->reason, null, $meta, heldChange: -$reserved, hold: $fresh);
+            // A pending hold is charged from the reserved credits at the front of the spend order; a late one,
+            // whose reservation is gone, from the credits nobody else reserves.
+            return self::take($wallet, TransactionType::Capture, $charge, $fresh->reason, null, $meta, heldChange: -$reserved, hold: $fresh, skip: $late ? null : 0);
         });
     }
 
@@ -168,9 +184,28 @@ final class Ledger
         });
     }
 
+    public static function extend(Hold $hold, ?int $ttl): Hold
+    {
+        $ttl = self::ttl($ttl);
+
+        return self::locked($hold->wallet, function () use ($hold, $ttl) {
+            $fresh = self::pending($hold);
+
+            if (($until = now()->addSeconds($ttl))->gt($fresh->expires_at)) {
+                $fresh->forceFill(['expires_at' => $until])->save();
+            }
+
+            $hold->setRawAttributes($fresh->getAttributes(), true);
+
+            return $hold;
+        });
+    }
+
     /** @param  array<string, int|float>  $usage */
     public static function meter(Wallet $wallet, array $usage, ?string $reason, ?string $key, array $meta): ?Transaction
     {
+        self::text($key, $reason);
+
         return self::locked($wallet, function (Wallet $wallet) use ($usage, $reason, $key, $meta) {
             if ($replay = self::replay($wallet, $key, TransactionType::Spend, fn (Transaction $t) => ($t->meta['usage'] ?? null) == $usage)) {
                 return $replay;
@@ -206,6 +241,8 @@ final class Ledger
         if ($spend->wallet_id !== $wallet->id || ! $spend->type->isRefundable()) {
             throw InvalidAmount::notRefundable($spend);
         }
+
+        self::text($key, $reason);
 
         return self::locked($wallet, function (Wallet $wallet) use ($spend, $amount, $reason, $key) {
             if ($replay = self::replay($wallet, $key, TransactionType::Refund, fn (Transaction $t) => $t->parent_id === $spend->id && ($amount === null || $t->amount === $amount))) {
@@ -261,44 +298,159 @@ final class Ledger
                 }
             }
 
-            $wallet->balance += $amount;
+            self::credit($wallet, $amount);
 
             return self::record($wallet, TransactionType::Refund, $amount, $reason ?? $spend->reason, $key, [], allocations: $allocations, parent: $spend);
         });
     }
 
-    /** Expire due lots, release stale holds and grant the current allowances, then save if anything changed. */
-    public static function refresh(Wallet $wallet): void
+    /**
+     * Move credits between two wallets in one database transaction, both locked. The receiver gets one lot per
+     * expiry the credits had, so a transfer never extends or shortens their life.
+     */
+    public static function transfer(Wallet $from, Wallet $to, int $amount, ?string $reason, ?string $key, array $meta): Transaction
     {
-        self::locked($wallet, fn () => null);
+        self::positive($amount);
+        self::text($key, $reason);
+
+        if ($from->getKey() === $to->getKey()) {
+            throw InvalidAmount::sameWallet();
+        }
+
+        return self::locked([$from, $to], function (Wallet $from, Wallet $to) use ($amount, $reason, $key, $meta) {
+            if ($replay = self::replay($from, $key, TransactionType::Transfer, fn (Transaction $t) => $t->amount === -$amount && ($t->meta['to_wallet'] ?? null) === $to->id)) {
+                return $replay;
+            }
+
+            if ($amount > $available = $from->balance - $from->held) {
+                throw new InsufficientCredits($from, $amount, $available);
+            }
+
+            $taken = self::drain($from, $amount, $from->held);
+            $from->balance -= $amount;
+            $sent = self::record($from, TransactionType::Transfer, -$amount, $reason, $key, ['to_wallet' => $to->id] + $meta, allocations: $taken);
+
+            $lots = [];
+
+            foreach ($taken as [, $credits, $grant]) {
+                $expiry = $grant->expires_at?->toDateTimeString() ?? '';
+                $lots[$expiry] ??= [$grant->expires_at, 0, []];
+                $lots[$expiry][1] -= $credits;
+                $lots[$expiry][2][] = $grant->id;
+            }
+
+            $allocations = [];
+
+            foreach ($lots as [$expiresAt, $credits, $grants]) {
+                $lot = $to->grants()->create([
+                    'amount' => $credits,
+                    'remaining' => $credits,
+                    'source' => 'transfer',
+                    'reason' => $reason,
+                    'expires_at' => $expiresAt,
+                    'meta' => ['from_wallet' => $from->id, 'from_grants' => $grants],
+                ]);
+
+                $allocations[] = [$lot->id, $credits];
+            }
+
+            self::credit($to, $amount);
+            self::record($to, TransactionType::Transfer, $amount, $reason, null, ['from_wallet' => $from->id] + $meta, allocations: $allocations, parent: $sent);
+
+            return $sent;
+        });
     }
 
     /**
-     * Run an operation on the wallet's row, locked and caught up, and copy the result back onto the caller's
-     * model. Events wait for the commit, so a listener never sees a balance the database rolled back.
+     * Expire due lots, release stale holds and grant the current allowances; true when that changed anything.
+     * Most calls find nothing to do and only read; the lock is taken when there is work.
+     */
+    public static function refresh(Wallet $wallet): bool
+    {
+        if (! self::behind($wallet)) {
+            return false;
+        }
+
+        $recorded = self::$recorded;
+        self::locked($wallet, fn () => null);
+
+        return self::$recorded > $recorded;
+    }
+
+    /** Reload the wallet without a lock and say whether a catch-up would change it. */
+    private static function behind(Wallet $wallet): bool
+    {
+        $fresh = $wallet->newQuery()->whereKey($wallet->getKey())->firstOrFail();
+        $wallet->setRawAttributes($fresh->getAttributes(), true);
+
+        foreach (Credits::allowancesFor($wallet) as $allowance) {
+            if ($allowance->owed($wallet) > 0) {
+                return true;
+            }
+        }
+
+        if ($wallet->holds()->pending()->where('expires_at', '<=', now())->exists()) {
+            return true;
+        }
+
+        // Due credits beyond what pending holds reserve expire; those within it are kept for the holds.
+        return (int) $wallet->grants()->due()->sum('remaining') > $wallet->held;
+    }
+
+    /**
+     * Run an operation on the wallets' rows, locked and caught up, and copy the result back onto the caller's
+     * models. Events wait for the commit, so a listener never sees a balance the database rolled back.
      *
      * @template T
      *
-     * @param  Closure(Wallet): T  $operation
+     * @param  Wallet|array<int, Wallet>  $wallets
+     * @param  Closure(Wallet...): T  $operation  called with the locked wallets, in the order given
      * @return T
      */
-    private static function locked(Wallet $wallet, Closure $operation): mixed
+    private static function locked(Wallet|array $wallets, Closure $operation): mixed
     {
+        $wallets = is_array($wallets) ? $wallets : [$wallets];
+
         try {
-            $result = DB::connection($wallet->getConnectionName())->transaction(function () use ($wallet, $operation) {
-                /** @var Wallet $fresh */
-                $fresh = Wallet::query()->whereKey($wallet->getKey())->lockForUpdate()->firstOrFail();
-                $before = $fresh->balance - $fresh->held;
+            $result = DB::connection($wallets[0]->getConnectionName())->transaction(function () use ($wallets, $operation) {
+                $fresh = [];
 
-                self::catchUp($fresh);
-                $result = $operation($fresh);
+                // Lock in id order, so two operations on the same pair of wallets (transfers both ways) cannot deadlock.
+                foreach (collect($wallets)->sortBy(fn (Wallet $wallet) => $wallet->getKey()) as $i => $wallet) {
+                    /** @var Wallet $locked */
+                    $locked = $wallet->newQuery()->whereKey($wallet->getKey())->lockForUpdate()->firstOrFail();
 
-                if ($fresh->isDirty()) {
-                    $fresh->save();
+                    if ($wallet->relationLoaded('holder')) {
+                        $locked->setRelation('holder', $wallet->getRelation('holder'));
+                    }
+
+                    $fresh[$i] = $locked;
                 }
 
-                self::checkLow($fresh, $before);
-                $wallet->setRawAttributes($fresh->getAttributes(), true);
+                ksort($fresh);
+                $before = [];
+
+                foreach ($fresh as $i => $wallet) {
+                    $before[$i] = [$wallet->balance - $wallet->held, $wallet->held];
+                    self::catchUp($wallet);
+                }
+
+                $result = $operation(...$fresh);
+
+                foreach ($fresh as $i => $wallet) {
+                    // What a settle or release gave back of a lot that expired under its hold expires now, not on
+                    // the next use.
+                    if ($wallet->held < $before[$i][1]) {
+                        self::expireDue($wallet);
+                    }
+
+                    if ($wallet->isDirty()) {
+                        $wallet->save();
+                    }
+
+                    self::checkLow($wallet, $before[$i][0]);
+                    $wallets[$i]->setRawAttributes($wallet->getAttributes(), true);
+                }
 
                 return $result;
             });
@@ -320,7 +472,7 @@ final class Ledger
         }
 
         $wallet->holds()
-            ->where('status', HoldStatus::Pending)
+            ->pending()
             ->where('expires_at', '<=', now())
             ->orderBy('id')
             ->get()
@@ -330,30 +482,22 @@ final class Ledger
     }
 
     /**
-     * Expire the remaining credits of due lots, except what pending holds still need: credits reserved before
-     * their lot ran out stay until the hold is settled or released, then expire on the next catch-up.
+     * Expire the remaining credits of due lots, except what pending holds reserve: they reserve the soonest-
+     * expiring credits, which due lots are, so those stay until the hold is settled or released.
      */
     private static function expireDue(Wallet $wallet): void
     {
-        $due = $wallet->grants()
-            ->where('remaining', '>', 0)
-            ->whereNotNull('expires_at')
-            ->where('expires_at', '<=', now())
-            ->orderBy('expires_at')
-            ->orderBy('id')
-            ->get();
+        $due = $wallet->grants()->due()->orderBy('expires_at')->orderBy('id')->get();
 
         if ($due->isEmpty()) {
             return;
         }
 
-        $alive = $wallet->balance - (int) $due->sum('remaining');
-        $keep = max(0, $wallet->held - $alive);
+        $keep = $wallet->held;
         $allocations = [];
         $total = 0;
 
-        // The lots that expired last keep the reserved credits; the oldest expire first.
-        foreach ($due->reverse() as $grant) {
+        foreach ($due as $grant) {
             $kept = min($keep, $grant->remaining);
             $keep -= $kept;
 
@@ -370,7 +514,7 @@ final class Ledger
 
         $wallet->balance -= $total;
 
-        self::record($wallet, TransactionType::Expire, -$total, 'Credits expired', null, [], allocations: array_reverse($allocations));
+        self::record($wallet, TransactionType::Expire, -$total, 'Credits expired', null, [], allocations: $allocations);
     }
 
     /** @internal Add a lot on a wallet the caller has locked and caught up. */
@@ -385,32 +529,61 @@ final class Ledger
             'meta' => $meta ?: null,
         ]);
 
-        $wallet->balance += $amount;
+        self::credit($wallet, $amount);
 
         return self::record($wallet, $type, $amount, $reason, $key, $meta, allocations: [[$grant->id, $amount]]);
     }
 
-    /** Take credits from the lots in spend order; the caller has checked that the wallet has them. */
-    private static function take(Wallet $wallet, TransactionType $type, int $amount, ?string $reason, ?string $key, array $meta, int $heldChange = 0, ?Hold $hold = null): Transaction
+    /** Add to the balance, refusing what a 64-bit column (and PHP's int) cannot hold: past the limit the number would wrap. */
+    private static function credit(Wallet $wallet, int $amount): void
+    {
+        if ($amount > PHP_INT_MAX - $wallet->balance) {
+            throw InvalidAmount::overflow($wallet, $amount);
+        }
+
+        $wallet->balance += $amount;
+    }
+
+    /**
+     * Take credits from the lots in spend order, after the first `$skip` (what pending holds reserve, unless
+     * given); the caller has checked that the wallet has them.
+     */
+    private static function take(Wallet $wallet, TransactionType $type, int $amount, ?string $reason, ?string $key, array $meta, int $heldChange = 0, ?Hold $hold = null, ?int $skip = null): Transaction
+    {
+        $allocations = self::drain($wallet, $amount, $skip ?? $wallet->held);
+        $wallet->balance -= $amount;
+
+        return self::record($wallet, $type, -$amount, $reason, $key, $meta, heldChange: $heldChange, hold: $hold, allocations: $allocations);
+    }
+
+    /** @return array<int, array{0: int, 1: int, 2: Grant}> grant id, credits taken (negative), the lot */
+    private static function drain(Wallet $wallet, int $amount, int $skip): array
     {
         $left = $amount;
         $allocations = [];
 
-        if ($left > 0) {
-            foreach ($wallet->grants()->spendable()->get() as $grant) {
-                $taken = min($left, $grant->remaining);
-                $grant->decrement('remaining', $taken);
-                $allocations[] = [$grant->id, -$taken];
+        if ($left <= 0) {
+            return [];
+        }
 
-                if (($left -= $taken) === 0) {
-                    break;
-                }
+        foreach ($wallet->grants()->spendable()->get() as $grant) {
+            $reserved = min($skip, $grant->remaining);
+            $skip -= $reserved;
+
+            if (($free = $grant->remaining - $reserved) === 0) {
+                continue;
+            }
+
+            $taken = min($left, $free);
+            $grant->decrement('remaining', $taken);
+            $allocations[] = [$grant->id, -$taken, $grant];
+
+            if (($left -= $taken) === 0) {
+                break;
             }
         }
 
-        $wallet->balance -= $amount;
-
-        return self::record($wallet, $type, -$amount, $reason, $key, $meta, heldChange: $heldChange, hold: $hold, allocations: $allocations);
+        return $allocations;
     }
 
     private static function releaseHold(Wallet $wallet, Hold $hold, ?string $reason, HoldStatus $status = HoldStatus::Released): Transaction
@@ -445,6 +618,7 @@ final class Ledger
             $allocations,
         ));
 
+        self::$recorded++;
         self::later(new TransactionRecorded($wallet, $transaction));
 
         return $transaction;
@@ -485,7 +659,7 @@ final class Ledger
     {
         $threshold = $wallet->low_balance_threshold ?? config('packstub-credits.low_balance_threshold');
 
-        if ($threshold === null) {
+        if ($threshold === null || $threshold === '') {
             return;
         }
 
@@ -502,6 +676,31 @@ final class Ledger
             throw InvalidAmount::notPositive($amount);
         }
     }
+
+    private static function ttl(?int $ttl): int
+    {
+        $ttl ??= (int) config('packstub-credits.hold_ttl', 900);
+
+        // Up to a century: past that the expiry no longer fits a timestamp.
+        if ($ttl <= 0 || $ttl > 100 * 365 * 86_400) {
+            throw InvalidAmount::lifetime($ttl);
+        }
+
+        return $ttl;
+    }
+
+    /** The string columns hold 255 characters; a longer value would fail in the database after the lock, or be cut short on a lenient one. */
+    private static function text(?string $key, ?string $reason, ?string $source = null): void
+    {
+        foreach (['idempotency key' => $key, 'reason' => $reason, 'source' => $source] as $field => $value) {
+            if ($value !== null && strlen($value) > 255) {
+                throw InvalidAmount::textTooLong($field, $value);
+            }
+        }
+    }
+
+    /** How many lines this process has written, so refresh() can say whether it changed anything. */
+    private static int $recorded = 0;
 
     /** @var array<int, object> */
     private static array $events = [];

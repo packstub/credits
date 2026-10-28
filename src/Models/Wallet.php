@@ -6,7 +6,9 @@ use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Packstub\Credits\Enums\TransactionType;
 use Packstub\Credits\Support\Ledger;
+use Packstub\Credits\Support\Meters;
 
 /**
  * One balance of one holder (a user, a team, a tenant), named so a holder
@@ -16,6 +18,8 @@ use Packstub\Credits\Support\Ledger;
  * the ledger under a row lock: never update these columns yourself.
  *
  * @property int $id
+ * @property string $holder_type
+ * @property int|string $holder_id
  * @property string $name
  * @property int $balance
  * @property int $held
@@ -84,6 +88,67 @@ class Wallet extends Model
         return $amount <= $this->available();
     }
 
+    /** Credits that expire by this moment unless they are spent first ("120 credits expire on 1 November"). */
+    public function expiring(CarbonInterface $by): int
+    {
+        Ledger::refresh($this);
+
+        return (int) $this->grants()->active()->where('expires_at', '<=', $by)->sum('remaining');
+    }
+
+    /** The balance right after the last line written at or before this moment. */
+    public function balanceAt(CarbonInterface $at): int
+    {
+        return (int) $this->transactions()->where('created_at', '<=', $at)->latest('id')->value('balance_after');
+    }
+
+    /** Credits charged for usage (spends and captures) less their refunds, from `$from` to `$to` (exclusive). */
+    public function spent(?CarbonInterface $from = null, ?CarbonInterface $to = null): int
+    {
+        $sums = $this->transactions()
+            ->ofType(TransactionType::Spend, TransactionType::Capture, TransactionType::Refund)
+            ->between($from, $to)
+            ->sum('amount');
+
+        return (int) -$sums;
+    }
+
+    /**
+     * Metered usage charged from `$from` to `$to` (exclusive), per meter: ['ai.input_tokens' => 1_204_331, …].
+     *
+     * @return array<string, int|float>
+     */
+    public function usage(?CarbonInterface $from = null, ?CarbonInterface $to = null): array
+    {
+        $usage = [];
+
+        $this->transactions()
+            ->ofType(TransactionType::Spend, TransactionType::Capture)
+            ->between($from, $to)
+            ->whereNotNull('meta')
+            ->select(['id', 'meta'])
+            ->lazyById()
+            ->each(function (Transaction $transaction) use (&$usage) {
+                foreach ($transaction->meta['usage'] ?? [] as $meter => $quantity) {
+                    $usage[$meter] = ($usage[$meter] ?? 0) + $quantity;
+                }
+            });
+
+        ksort($usage);
+
+        return $usage;
+    }
+
+    /**
+     * What metered usage would charge right now, fractions this wallet carries included; charges nothing.
+     *
+     * @param  string|array<string, int|float>  $meter  a meter name, or meter => quantity
+     */
+    public function quote(string|array $meter, int|float|null $quantity = null): int
+    {
+        return Meters::price($this, is_array($meter) ? $meter : [$meter => $quantity])[0];
+    }
+
     /** Add a lot of credits, optionally expiring; `source` says where they came from ("top-up", "plan", "promo"). */
     public function grant(int $amount, ?string $reason = null, ?CarbonInterface $expiresAt = null, string $source = 'grant', ?string $key = null, array $meta = []): Transaction
     {
@@ -119,9 +184,18 @@ class Wallet extends Model
         return Ledger::refund($this, $transaction, $amount, $reason, $key);
     }
 
-    /** An operator's correction: positive adds a lot, negative takes credits like a spend. */
-    public function adjust(int $amount, string $reason, ?string $key = null, array $meta = []): Transaction
+    /**
+     * Move credits to another wallet (a team's pool to a member, one currency to a sub-account), keeping their
+     * expiry. Returns this wallet's line; the receiver's line points back to it as its parent.
+     */
+    public function transfer(Wallet $to, int $amount, ?string $reason = null, ?string $key = null, array $meta = []): Transaction
     {
-        return Ledger::adjust($this, $amount, $reason, $key, $meta);
+        return Ledger::transfer($this, $to, $amount, $reason, $key, $meta);
+    }
+
+    /** An operator's correction: positive adds a lot, negative takes credits like a spend. */
+    public function adjust(int $amount, string $reason, ?string $key = null, array $meta = [], ?CarbonInterface $expiresAt = null): Transaction
+    {
+        return Ledger::adjust($this, $amount, $reason, $key, $meta, $expiresAt);
     }
 }

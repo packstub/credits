@@ -25,8 +25,12 @@ Charging per use, AI above all, needs more than a balance and its history:
 - **Plan allowances without a cron.** `Allowance::monthly(1_000)` is granted the first time a wallet is touched in a period, once, however many workers race for it. Anchored to a subscription's start, it renews on the 28th when the 31st does not exist.
 - **Idempotency keys** on every operation, so a retried job or webhook never charges twice, and a key reused for a different request is an error instead of a silent no-op.
 - **Refunds back to the original lots**, keeping their expiry; partial refunds unwind from the end so no credit returns twice.
-- **Books that prove they balance.** `php artisan credits:audit` recomputes every cached number from the rows under it and exits non-zero on drift.
-- **Safe under concurrency.** Every operation runs in one transaction under a row lock. The suite forks 20 processes that race for one wallet and checks that exactly the affordable spends go through.
+- **Transfers between wallets**, a team's pool to a member, both locked in one transaction, the credits keeping their expiry.
+- **Upgrades that apply at once.** A plan that grows mid-period grants the difference immediately; one that shrinks takes effect next period. Rollover for good or for a number of periods.
+- **Rates per plan** over the configured meters, and quotes of what usage would cost before charging it.
+- **Reporting from the ledger**: what expires when, the balance at any moment, credits spent and metered usage per period.
+- **Books that prove they balance.** `php artisan credits:audit` recomputes every cached number from the rows under it and exits non-zero on drift; ledger lines are append-only.
+- **Safe under concurrency.** Every operation runs in one transaction under a row lock; reading a balance takes none unless something is due. The suite forks 20 processes that race for one wallet and checks that exactly the affordable spends go through, and replays hundreds of random operations through expiries, holds and periods, auditing the books as it goes.
 
 Integer credits throughout (pick your scale: 1 credit = 1/1000 of a cent works), no floats, Laravel 13, PHP 8.4+, SQLite, MySQL, MariaDB and Postgres.
 
@@ -57,10 +61,11 @@ Schedule::command('credits:expire')->hourly();
 ## Documentation
 
 - [Installation and configuration](docs/installation.md)
-- [Wallets, lots and spending](docs/spending.md): grants, expiry, idempotency, refunds, adjustments, events
-- [Holds and AI calls](docs/holds.md): reserve, settle, release, late settles, a laravel/ai recipe
-- [Meters](docs/meters.md): usage priced in credits with exact fractions
-- [Allowances](docs/allowances.md): plan credits every period, anchored or calendar, rollover
+- [Wallets, lots and spending](docs/spending.md): grants, expiry, idempotency, refunds, transfers, adjustments, reporting, events, exceptions
+- [Holds and AI calls](docs/holds.md): reserve, settle, release, extend, late settles, expiring credits, a laravel/ai recipe
+- [Meters](docs/meters.md): usage priced in credits with exact fractions, quotes, rates per plan
+- [Allowances](docs/allowances.md): plan credits every period, anchored or calendar, upgrades, rollover
+- [Selling credits](docs/selling-credits.md): top-ups with Cashier (Stripe, Paddle), plan credits, refunded payments
 - [Auditing and concurrency](docs/auditing.md): `credits:audit`, row locks, SQLite in production
 
 ## Testing
@@ -68,6 +73,10 @@ Schedule::command('credits:expire')->hourly();
 ```bash
 composer test
 ```
+
+## Security
+
+Report vulnerabilities to security@packstub.dev, not through a public issue: see [SECURITY.md](SECURITY.md), which also lists what to keep on your side of the line (wallets from the authenticated holder, holds and transactions looked up through the wallet, quantities from the provider's response).
 
 ## License
 

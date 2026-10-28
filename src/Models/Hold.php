@@ -2,10 +2,14 @@
 
 namespace Packstub\Credits\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 use Packstub\Credits\Enums\HoldStatus;
+use Packstub\Credits\Enums\TransactionType;
 use Packstub\Credits\Support\Ledger;
 
 /**
@@ -32,6 +36,7 @@ class Hold extends Model
     protected function casts(): array
     {
         return [
+            'wallet_id' => 'integer',
             'amount' => 'integer',
             'captured' => 'integer',
             'shortfall' => 'integer',
@@ -46,9 +51,31 @@ class Hold extends Model
         return $this->belongsTo(Wallet::class);
     }
 
+    /** The ledger lines of this hold: the hold itself, then its capture or release. */
+    public function transactions(): HasMany
+    {
+        return $this->hasMany(Transaction::class);
+    }
+
+    /** The capture that settled the hold, once it is settled. */
+    public function settlement(): HasOne
+    {
+        return $this->hasOne(Transaction::class)->where('type', TransactionType::Capture);
+    }
+
+    public function scopePending(Builder $query): void
+    {
+        $query->where('status', HoldStatus::Pending);
+    }
+
     public function isPending(): bool
     {
         return $this->status === HoldStatus::Pending;
+    }
+
+    public function isSettled(): bool
+    {
+        return $this->status === HoldStatus::Captured;
     }
 
     /**
@@ -83,5 +110,14 @@ class Hold extends Model
     public function release(): Transaction
     {
         return Ledger::release($this);
+    }
+
+    /**
+     * Keep the hold for another `$ttl` seconds from now (the configured `hold_ttl` by default), for work that
+     * is still running: a long stream, a slow job. Never shortens it; throws HoldNotPending once it is over.
+     */
+    public function extend(?int $ttl = null): static
+    {
+        return Ledger::extend($this, $ttl);
     }
 }

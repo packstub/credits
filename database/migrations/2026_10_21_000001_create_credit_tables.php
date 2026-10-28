@@ -18,7 +18,13 @@ return new class extends Migration
     {
         Schema::create('credit_wallets', function (Blueprint $table) {
             $table->id();
-            $table->morphs('holder');
+
+            match (config('packstub-credits.holder_key_type', 'int')) {
+                'uuid' => $table->uuidMorphs('holder'),
+                'ulid' => $table->ulidMorphs('holder'),
+                default => $table->morphs('holder'),
+            };
+
             $table->string('name')->default('default');
             $table->bigInteger('balance')->default(0);
             $table->bigInteger('held')->default(0);

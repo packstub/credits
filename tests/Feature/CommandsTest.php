@@ -3,7 +3,9 @@
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Packstub\Credits\Events\TransactionRecorded;
+use Packstub\Credits\Facades\Credits;
 use Packstub\Credits\Models\Wallet;
+use Packstub\Credits\Tests\Fixtures\Models\Team;
 
 /** A busy month: every operation the ledger has, across lots that expire and lots that don't. */
 function busyWallet(Wallet $wallet): Wallet
@@ -72,4 +74,52 @@ it('expires lots and releases holds of wallets nobody touches', function () {
 
     Event::assertDispatchedTimes(TransactionRecorded::class, 2);
     expect(Wallet::query()->find($idle->id)->only('balance', 'held'))->toBe(['balance' => 10, 'held' => 0]);
+});
+
+it('finds a lot holding more than it was granted', function () {
+    $wallet = $this->team()->credits();
+    $grant = $wallet->grant(10);
+    $lot = $grant->allocations->first()->grant_id;
+
+    // Every cached number agrees, yet the lot holds more than it was ever given.
+    DB::table('credit_grants')->where('id', $lot)->update(['amount' => 5]);
+
+    $this->artisan('credits:audit')
+        ->expectsOutputToContain('0 <= remaining <= amount')
+        ->assertFailed();
+});
+
+it('proves transfers balance on both wallets', function () {
+    $pool = busyWallet($this->team('Acme')->credits());
+    $member = $this->team('Member')->credits();
+
+    $pool->transfer($member, $pool->available());
+    $member->spend(1);
+
+    $this->artisan('credits:audit')->expectsOutputToContain('2 wallets balanced.')->assertSuccessful();
+});
+
+it('counts only the wallets it changed, not those whose expired lot a hold still needs', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(40, expiresAt: now()->addHour());
+    $wallet->hold(40, ttl: 7200);
+
+    $this->travel(90)->minutes();
+
+    $this->artisan('credits:expire')->expectsOutputToContain('0 wallets caught up.')->assertSuccessful();
+    expect($wallet->total())->toBe(40);
+});
+
+it('keeps catching up the other wallets when one fails', function () {
+    $broken = $this->team('Broken')->credits();
+    $broken->grant(10, expiresAt: now()->addHour());
+    $fine = $this->team('Fine')->credits();
+    $fine->grant(10, expiresAt: now()->addHour());
+
+    Credits::allowancesUsing(fn (Team $team) => $team->name === 'Broken' ? throw new RuntimeException('Billing API down') : []);
+    $this->travel(2)->hours();
+
+    $this->artisan('credits:expire')->expectsOutputToContain('1 wallet caught up.')->assertSuccessful();
+    expect(Wallet::query()->find($fine->id)->balance)->toBe(0)
+        ->and(Wallet::query()->find($broken->id)->balance)->toBe(10);
 });

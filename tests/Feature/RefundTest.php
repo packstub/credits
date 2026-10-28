@@ -15,7 +15,7 @@ it('gives a refund back to the lots the credits came from, keeping their expiry'
     expect($refund->type)->toBe(TransactionType::Refund)
         ->and($refund->amount)->toBe(30)
         ->and($refund->parent_id)->toBe($spend->id)
-        ->and(Grant::query()->pluck('remaining', 'source')->all())->toBe(['promo' => 10, 'top-up' => 50])
+        ->and(Grant::query()->orderBy('id')->pluck('remaining', 'source')->all())->toBe(['promo' => 10, 'top-up' => 50])
         ->and($spend->refundable())->toBe(0);
 });
 
@@ -26,10 +26,10 @@ it('unwinds partial refunds from the end so no credit comes back twice', functio
     $spend = $wallet->spend(30); // 10 from promo, then 20 from top-up
 
     $wallet->refund($spend, 15);
-    expect(Grant::query()->pluck('remaining', 'source')->all())->toBe(['promo' => 0, 'top-up' => 45]);
+    expect(Grant::query()->orderBy('id')->pluck('remaining', 'source')->all())->toBe(['promo' => 0, 'top-up' => 45]);
 
     $wallet->refund($spend, 10);
-    expect(Grant::query()->pluck('remaining', 'source')->all())->toBe(['promo' => 5, 'top-up' => 50]);
+    expect(Grant::query()->orderBy('id')->pluck('remaining', 'source')->all())->toBe(['promo' => 5, 'top-up' => 50]);
 
     expect($spend->refundable())->toBe(5)
         ->and(fn () => $wallet->refund($spend, 6))->toThrow(InvalidAmount::class);

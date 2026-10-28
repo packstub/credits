@@ -6,7 +6,7 @@ use LogicException;
 use Packstub\Credits\Models\Transaction;
 
 /** The key was already used for a different request: two operations share a key by mistake. */
-class IdempotencyConflict extends LogicException
+class IdempotencyConflict extends LogicException implements CreditsException
 {
     public function __construct(
         public readonly string $key,

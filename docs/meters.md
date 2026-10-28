@@ -26,4 +26,31 @@ Credits are integers, usage rarely divides evenly. A meter charges whole credits
 
 `meter()` charges after the fact, so a wallet that cannot cover it is charged what it has; the rest is recorded as `shortfall` in the transaction's meta and `Shortfall` fires. Gate expensive work with a [hold](holds.md) to avoid that.
 
-A meter without a rate throws `UnknownMeter`. A keyed call below one credit leaves a zero line on the ledger, so a retry does not carry its fraction twice.
+## Rules
+
+- A meter without a rate throws `UnknownMeter`, and so does a rate that is not a whole number of credits (zero or more) per a whole number of units (one or more).
+- Quantities are integers or floats of zero or more; a float is rounded to the unit. A negative, missing or non-numeric quantity, or no usage at all, throws `InvalidAmount` and charges nothing.
+- A keyed call below one credit leaves a zero line on the ledger, so a retry does not carry its fraction twice.
+
+## Quotes
+
+What usage would cost right now, the fractions the wallet carries included, without charging it; handy for sizing a hold or showing a price:
+
+```php
+$wallet->quote('sms', 120);                                              // 240
+$wallet->quote(['ai.input_tokens' => 20_000, 'ai.output_tokens' => 4_000]);
+```
+
+## Rates per plan
+
+The configured rates apply to everyone unless a resolver says otherwise. It is asked on every metered call and returns the rates that differ for this holder; meters it leaves out keep their configured rate:
+
+```php
+// AppServiceProvider::boot()
+Credits::metersUsing(fn (Team $team, string $wallet) => match ($team->plan) {
+    'enterprise' => ['ai.output_tokens' => ['credits' => 12, 'per' => 1_000_000]],
+    default => [],
+});
+```
+
+A rate change applies to the next call. Remainders are kept in units × credits, so change a meter's `per` only between periods if fractions in flight matter to you.

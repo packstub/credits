@@ -17,6 +17,7 @@ abstract class TestCase extends Orchestra
         parent::setUp();
 
         Credits::allowancesUsing(null);
+        Credits::metersUsing(null);
     }
 
     protected function getPackageProviders($app): array

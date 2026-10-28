@@ -6,6 +6,7 @@ use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use InvalidArgumentException;
 use Packstub\Credits\Enums\TransactionType;
+use Packstub\Credits\Models\Grant;
 use Packstub\Credits\Models\Wallet;
 
 /**
@@ -14,13 +15,15 @@ use Packstub\Credits\Models\Wallet;
  * it, keyed by the period, so it arrives once however many workers race for
  * it and no scheduler has to run. Unless it rolls over, the lot expires when
  * the period ends. A wallet nobody touched for three months gets this
- * month's allowance, not three.
+ * month's allowance, not three. A plan that grows mid-period (an upgrade,
+ * more seats) grants the difference at once; one that shrinks keeps what
+ * this period already granted and takes effect from the next.
  */
 final class Allowance
 {
     private ?CarbonInterface $anchor = null;
 
-    private bool $rollover = false;
+    private bool|int $rollover = false;
 
     private function __construct(
         public readonly int $amount,
@@ -60,7 +63,15 @@ final class Allowance
         return $this;
     }
 
-    /** Periods start on this moment's anniversaries (a subscription's start) instead of the calendar's. */
+    public function name(): string
+    {
+        return $this->name;
+    }
+
+    /**
+     * Periods start on this moment's anniversaries (a subscription's start) instead of the calendar's. Before
+     * the anchor nothing is granted: the first period starts on it.
+     */
     public function anchoredAt(?CarbonInterface $anchor): self
     {
         $this->anchor = $anchor;
@@ -68,10 +79,17 @@ final class Allowance
         return $this;
     }
 
-    /** Unused credits stay after the period ends instead of expiring with it. */
-    public function rollover(bool $rollover = true): self
+    /**
+     * Unused credits stay after the period ends instead of expiring with it: `rollover()` keeps them for good,
+     * `rollover(2)` for two more periods, `rollover(false)` lets them expire with the period (the default).
+     */
+    public function rollover(bool|int $periods = true): self
     {
-        $this->rollover = $rollover;
+        if (is_int($periods) && $periods < 0) {
+            throw new InvalidArgumentException('An allowance rolls over for zero or more periods.');
+        }
+
+        $this->rollover = $periods === 0 ? false : $periods;
 
         return $this;
     }
@@ -115,29 +133,73 @@ final class Allowance
 
     public function key(CarbonInterface $start): string
     {
-        return "allowance:{$this->name}:".$start->utc()->format('Y-m-d\TH:i:s');
+        return "allowance:{$this->name}:".CarbonImmutable::instance($start)->utc()->format('Y-m-d\TH:i:s');
     }
 
-    /** Called by the ledger under the wallet's lock. */
-    public function grantInto(Wallet $wallet): void
+    /** What this period still owes the wallet: the allowance less what this period already granted. */
+    public function owed(Wallet $wallet): int
+    {
+        [$start] = $this->period();
+
+        if ($start->gt(now())) {
+            return 0;
+        }
+
+        return max(0, $this->amount - $this->granted($wallet, $start));
+    }
+
+    /** Called by the ledger under the wallet's lock; true when it granted something. */
+    public function grantInto(Wallet $wallet): bool
     {
         [$start, $end] = $this->period();
-        $key = $this->key($start);
 
-        if ($wallet->transactions()->where('idempotency_key', $key)->exists()) {
-            return;
+        if ($start->gt(now()) || ($owed = $this->amount - ($granted = $this->granted($wallet, $start))) <= 0) {
+            return false;
         }
+
+        // The first grant of a period is keyed by the period; a top-up after an upgrade by the period and the new
+        // total, which only ever grows, so each is granted once.
+        $key = $granted === 0 ? $this->key($start) : $this->key($start).':'.$this->amount;
 
         Ledger::addLot(
             $wallet,
             TransactionType::Grant,
-            $this->amount,
-            "Allowance for {$start->toDateString()} to {$end->toDateString()}",
-            $this->rollover ? null : $end,
+            $owed,
+            "Allowance for {$start->toDateString()} to {$end->toDateString()}".($granted === 0 ? '' : ' (increase)'),
+            $this->expiresAt($end),
             'allowance',
             $key,
             ['allowance' => $this->name, 'period_start' => $start->toIso8601String(), 'period_end' => $end->toIso8601String()],
         );
+
+        return true;
+    }
+
+    /** What this allowance already granted the wallet in the period starting at `$start`. */
+    private function granted(Wallet $wallet, CarbonImmutable $start): int
+    {
+        // A coarse filter on the timestamp (a day of margin for time zones), then the exact period from the meta.
+        return (int) $wallet->grants()
+            ->where('source', 'allowance')
+            ->where('created_at', '>=', $start->subDay())
+            ->get(['amount', 'meta'])
+            ->filter(fn (Grant $grant) => ($grant->meta['allowance'] ?? null) === $this->name
+                && isset($grant->meta['period_start'])
+                && CarbonImmutable::parse($grant->meta['period_start'])->eq($start))
+            ->sum('amount');
+    }
+
+    private function expiresAt(CarbonImmutable $end): ?CarbonImmutable
+    {
+        if ($this->rollover === true) {
+            return null;
+        }
+
+        for ($i = 0; $i < (int) $this->rollover; $i++) {
+            [, $end] = $this->period($end);
+        }
+
+        return $end;
     }
 
     private function add(CarbonImmutable $from, int $n): CarbonImmutable

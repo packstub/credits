@@ -14,5 +14,11 @@ return new class extends Migration
             $table->string('plan')->nullable();
             $table->timestamps();
         });
+
+        Schema::create('projects', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+            $table->string('name');
+            $table->timestamps();
+        });
     }
 };

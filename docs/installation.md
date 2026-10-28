@@ -24,7 +24,9 @@ $team->credits('sms');     // a second, separate balance
 $team->creditWallets;      // all of them
 ```
 
-Without the trait: `Credits::wallet($team, 'default')`.
+Without the trait: `Credits::wallet($team, 'default')`. The holder must be saved first; a wallet for an unsaved model throws.
+
+Holders keyed by a UUID or a ULID (`HasUuids`, `HasUlids`) work too: set `CREDITS_HOLDER_KEY_TYPE=uuid` (or `ulid`) **before** the first migration, so `credit_wallets.holder_id` is created as that type instead of a big integer. All holders of one app share the type; changing it later needs a migration of your own on `credit_wallets`.
 
 ## Configuration
 
@@ -34,7 +36,8 @@ php artisan vendor:publish --tag=packstub-credits-config
 
 | Key | Env | Default | What |
 | --- | --- | --- | --- |
-| `meters` | | `[]` | Rates per meter: `'ai.output_tokens' => ['credits' => 5, 'per' => 1_000]`. See [Meters](meters.md). |
+| `holder_key_type` | `CREDITS_HOLDER_KEY_TYPE` | `int` | Primary key type of the models that hold credits: `int`, `uuid` or `ulid`. Read when the tables are created. |
+| `meters` | | `[]` | Rates per meter: `'ai.output_tokens' => ['credits' => 5, 'per' => 1_000]`. Different rates per plan with `Credits::metersUsing()`. See [Meters](meters.md). |
 | `hold_ttl` | `CREDITS_HOLD_TTL` | `900` | Seconds a hold lives when placed without a `ttl`. |
 | `refund_grace_days` | `CREDITS_REFUND_GRACE_DAYS` | `7` | Lifetime of the new lot a refund creates for credits whose lot expired meanwhile. |
 | `low_balance_threshold` | `CREDITS_LOW_BALANCE_THRESHOLD` | `null` | `BalanceLow` fires when available credits fall below it. A wallet's own `low_balance_threshold` column wins. |

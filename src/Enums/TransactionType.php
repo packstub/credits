@@ -13,6 +13,9 @@ enum TransactionType: string
     case Refund = 'refund';
     case Adjust = 'adjust';
 
+    // Credits moved between two wallets: negative on the sender's ledger, positive on the receiver's.
+    case Transfer = 'transfer';
+
     /** A transaction a refund may point back to: it took credits for something. */
     public function isRefundable(): bool
     {

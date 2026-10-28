@@ -10,8 +10,8 @@ use Packstub\Credits\Models\Wallet;
 /**
  * Prove the books balance. Every cached number is recomputed from the rows
  * under it: the wallet from its lots, its holds and its ledger; each lot
- * from the allocations that filled and drained it; each transaction from
- * its own allocations. Read-only; exits non-zero on any drift, so it can
+ * from the allocations that filled and drained it, and within its own
+ * amount; each transaction from its own allocations. Read-only; exits non-zero on any drift, so it can
  * run in CI against a copy of production or nightly with an alert.
  */
 class AuditCommand extends Command
@@ -61,6 +61,14 @@ class AuditCommand extends Command
                 if ($wallet->held > $wallet->balance) {
                     $problems[] = [$id, 'held <= balance', $wallet->held, $wallet->balance];
                 }
+
+                if ($wallet->held < 0) {
+                    $problems[] = [$id, 'held >= 0', $wallet->held, 0];
+                }
+            }
+
+            foreach ($this->lotsOutOfBounds($ids) as $row) {
+                $problems[] = [$row->wallet_id, "lot {$row->id}: 0 <= remaining <= amount", $row->remaining, $row->amount];
             }
 
             foreach ($this->lotDrift($ids) as $row) {
@@ -106,6 +114,14 @@ class AuditCommand extends Command
             ->havingRaw('g.remaining <> coalesce(sum(a.amount), 0)')
             ->selectRaw('g.id, g.wallet_id, g.remaining, coalesce(sum(a.amount), 0) as allocated')
             ->get();
+    }
+
+    private function lotsOutOfBounds(array $ids): iterable
+    {
+        return DB::table('credit_grants')
+            ->whereIn('wallet_id', $ids)
+            ->where(fn ($query) => $query->where('remaining', '<', 0)->orWhereColumn('remaining', '>', 'amount'))
+            ->get(['id', 'wallet_id', 'remaining', 'amount']);
     }
 
     private function transactionDrift(array $ids): iterable
