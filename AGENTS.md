@@ -34,5 +34,5 @@ composer lint               # Pint
 ## Conventions
 
 - PHP 8.4+, Laravel 13. Every change needs a test and a `CHANGELOG.md` line. Integer credits only.
-- Changelog headings are `## <version> — <date>`; the tag is `v<version>` on `main`.
+- Changelog headings are `## <version> — <date>`; the tag is `v<version>` on `main`. The section becomes the GitHub release and `release.yml` appends GitHub's list of merged pull requests under it, so keep it short and human: an optional lead sentence, then at most about six one-line bullets saying what a user gets, in plain words (class or method names only when a user needs the name, never lists of them). Always keep breaking changes with an `**Upgrading:**` line, security or privacy fixes, new minimum PHP/Laravel versions and migrations to run; leave out CI, tests and refactors.
 - Migrations follow the workspace rule: additive, in the `create_*` migration and a guarded `add_*` one.
