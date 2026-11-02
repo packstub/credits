@@ -12,6 +12,5 @@ First release of Credits for Laravel: credits and usage metering for your app, k
 - Monthly allowances granted lazily, no cron needed, with rollover
 - Transfers, refunds, operator adjustments and idempotency keys on every operation
 - `credits:audit` checks every cached balance against the ledger; a guide covers selling credits with Cashier
-- Security: amounts past the 64-bit integer range are refused instead of wrapping into negative charges
 
 Docs: https://packstub.dev/docs/credits
