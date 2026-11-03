@@ -27,6 +27,8 @@ $hold->settleUsage([                                      // charge what it actu
 $team->credits()->available();                            // whole credits; a fraction carries to the next call
 ```
 
+![In php artisan tinker a team gets 500 credits and 1,000 that expire at month end, an AI turn holds 200 and settles at 137, the charge comes out of the expiring lot, then credits:audit reports the wallet balanced](https://raw.githubusercontent.com/packstub/art/main/credits/docs/credits.gif)
+
 ## Features
 
 - **[Holds for AI calls](https://packstub.dev/docs/credits/holds)**: reserve an estimate before the call, settle what it cost after; a dead worker leaks nothing.
