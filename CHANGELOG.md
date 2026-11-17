@@ -4,7 +4,7 @@ All notable changes to `packstub/credits` are documented here.
 
 ## Unreleased
 
-- `composer.json`'s homepage points at the package's page on packstub.dev
+- `composer.json`'s homepage and docs link point at packstub.dev
 
 ## 1.0.0 — 2026-10-28
 
