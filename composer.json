@@ -69,10 +69,11 @@
     },
     "minimum-stability": "stable",
     "prefer-stable": true,
-    "homepage": "https://github.com/packstub/credits",
+    "homepage": "https://packstub.dev/plugins/credits",
     "support": {
         "issues": "https://github.com/packstub/credits/issues",
-        "source": "https://github.com/packstub/credits"
+        "source": "https://github.com/packstub/credits",
+        "docs": "https://packstub.dev/docs/credits"
     },
     "suggest": {
         "packstub/agents": "Charge AI turns in credits: hold before the turn, settle on the token usage through the meters.",

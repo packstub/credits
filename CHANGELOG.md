@@ -2,6 +2,10 @@
 
 All notable changes to `packstub/credits` are documented here.
 
+## Unreleased
+
+- `composer.json`'s homepage points at the package's page on packstub.dev
+
 ## 1.0.0 — 2026-10-28
 
 First release of Credits for Laravel: credits and usage metering for your app, kept in an append-only ledger. Requires PHP 8.4 and Laravel 13.
