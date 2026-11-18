@@ -2,7 +2,7 @@
 
 All notable changes to `packstub/credits` are documented here.
 
-## Unreleased
+## 1.1.0 — 2026-11-18
 
 - Runs on PHP 8.3: the package now requires PHP 8.3 or newer instead of 8.4, so apps still on 8.3 can install it (SQLite with concurrent writers still needs PHP 8.4, see the SQLite section of the docs)
 - Fix the `meter()` example in the docs: the reason is passed as `reason:`, not as the second argument (the quantity)
