@@ -47,7 +47,9 @@ Integer credits throughout (pick your scale: 1 credit = 1/1000 of a cent works),
 
 | Credits | Laravel | PHP |
 | --- | --- | --- |
-| 1.x | 13.x | 8.4+ |
+| 1.x | 13.x | 8.3+ |
+
+SQLite with several processes writing at once needs PHP 8.4+ (Laravel's `transaction_mode` works only there); MySQL, MariaDB and Postgres run on 8.3 as well. See [SQLite](docs/auditing.md#sqlite).
 
 ## Installation
 

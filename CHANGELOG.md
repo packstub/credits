@@ -4,6 +4,7 @@ All notable changes to `packstub/credits` are documented here.
 
 ## Unreleased
 
+- Runs on PHP 8.3: the package now requires PHP 8.3 or newer instead of 8.4, so apps still on 8.3 can install it (SQLite with concurrent writers still needs PHP 8.4, see the SQLite section of the docs)
 - `composer.json`'s homepage and docs link point at packstub.dev
 
 ## 1.0.0 — 2026-10-28

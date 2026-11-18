@@ -78,4 +78,8 @@ it('never spends the same credits twice when processes race', function () {
     $this->artisan('credits:audit')->assertSuccessful();
 
     @unlink($path);
-})->skip(! function_exists('pcntl_fork'), 'needs pcntl');
+})
+    ->skip(! function_exists('pcntl_fork'), 'needs pcntl')
+    // Laravel runs `transaction_mode` (BEGIN IMMEDIATE) only on PHP 8.4+; below that SQLite transactions are
+    // DEFERRED and most of the racing spends fail with "database is locked" (docs/auditing.md#sqlite).
+    ->skip(PHP_VERSION_ID < 80400, 'SQLite transaction_mode needs PHP 8.4: on 8.3 concurrent spends fail with "database is locked"');
