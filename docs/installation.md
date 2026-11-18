@@ -52,4 +52,4 @@ Schedule::command('credits:expire')->hourly();
 
 ## SQLite in production
 
-Set `'transaction_mode' => 'IMMEDIATE'` on the SQLite connection. See [Auditing and concurrency](auditing.md#sqlite).
+Set `'transaction_mode' => 'IMMEDIATE'` on the SQLite connection, on PHP 8.4 or newer: Laravel ignores the setting on PHP 8.3, so concurrent writers there fail spends with "database is locked". See [Auditing and concurrency](auditing.md#sqlite).

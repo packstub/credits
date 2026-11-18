@@ -14,7 +14,7 @@ A meter prices usage in credits: `credits` per `per` units.
 
 ```php
 $wallet->meter('sms', 3);
-$wallet->meter(['ai.input_tokens' => 18_204, 'ai.output_tokens' => 911], 'Chat answer', key: "turn:{$id}");
+$wallet->meter(['ai.input_tokens' => 18_204, 'ai.output_tokens' => 911], reason: 'Chat answer', key: "turn:{$id}");
 $hold->settleUsage(['ai.input_tokens' => 18_204, 'ai.output_tokens' => 911]);
 ```
 

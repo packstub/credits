@@ -39,3 +39,5 @@ SQLite has no row locks. Its default `DEFERRED` transactions let two processes r
     'transaction_mode' => 'IMMEDIATE',
 ],
 ```
+
+`transaction_mode` needs PHP 8.4 or newer: on PHP 8.3 Laravel ignores it and starts every SQLite transaction as `DEFERRED`. Credits still runs on 8.3 and no credit is ever spent twice, but with several processes writing to one SQLite file at once (queue workers, PHP-FPM) spends the wallet could afford fail with "database is locked". Run concurrent writers on PHP 8.4+, or use MySQL, MariaDB or Postgres, whose row locks work on every supported PHP version.
