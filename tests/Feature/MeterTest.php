@@ -50,6 +50,16 @@ it('charges what the wallet has for usage that already happened', function () {
     Event::assertDispatched(Shortfall::class, fn (Shortfall $e) => $e->amount === 5 && $e->hold === null);
 });
 
+it('takes a usage array with a named reason and key, as the docs show', function () {
+    $wallet = $this->team()->credits();
+    $wallet->grant(100);
+
+    $spend = $wallet->meter(['ai.input_tokens' => 18_204, 'ai.output_tokens' => 911], reason: 'Chat answer', key: 'turn:1');
+
+    expect($spend->reason)->toBe('Chat answer')
+        ->and($wallet->meter(['ai.input_tokens' => 18_204, 'ai.output_tokens' => 911], reason: 'Chat answer', key: 'turn:1')->is($spend))->toBeTrue();
+});
+
 it('does not carry a fraction twice when a keyed call is retried', function () {
     $wallet = $this->team()->credits();
     $wallet->grant(10);
